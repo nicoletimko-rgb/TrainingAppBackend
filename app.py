@@ -1,6 +1,9 @@
 """Basketball workout API. Run locally with `python app.py`."""
 
 import os
+import sqlite3                      # Built-in database, so no new install is needed
+from contextlib import contextmanager
+from datetime import date, timedelta
 
 import requests
 from dotenv import load_dotenv
@@ -164,6 +167,238 @@ def create_workout():
         ],
         "coach_note": tips[level],
     })
+
+
+# =====================================================================
+# DATABASE: saved workouts (plans) and logged sessions (what you did)
+# =====================================================================
+
+# Where the SQLite file lives. NOTE: Render's free tier wipes local files on
+# each deploy. Attach a Render persistent disk and set DATABASE_PATH to it
+# (e.g. /var/data/training.db), or move to Postgres, to keep data long-term.
+DB_PATH = os.getenv("DATABASE_PATH", "training.db")
+
+SCHEMA = """
+-- A saved workout "template": a named list of drills the user built.
+CREATE TABLE IF NOT EXISTS workouts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,                       -- anonymous per-device id
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+-- The drills inside a template, in order, with planned minutes and shots.
+CREATE TABLE IF NOT EXISTS workout_drills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workout_id INTEGER NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    category TEXT NOT NULL,
+    minutes INTEGER NOT NULL,
+    shots INTEGER NOT NULL                       -- planned shots (0 = not a shooting drill)
+);
+-- A logged session: one day the user actually trained.
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    performed_on TEXT NOT NULL,                  -- YYYY-MM-DD
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+-- Results for each drill in a session: time spent and shots made / attempted.
+CREATE TABLE IF NOT EXISTS session_drills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    category TEXT NOT NULL,
+    minutes INTEGER NOT NULL,
+    shots_made INTEGER NOT NULL,
+    shots_attempted INTEGER NOT NULL
+);
+"""
+
+
+@contextmanager
+def connect():
+    """Open a connection, commit on success, and always close it."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row                # rows behave like dicts
+    conn.execute("PRAGMA foreign_keys = ON")      # makes ON DELETE CASCADE work
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+with connect() as _conn:                          # create tables on startup
+    _conn.executescript(SCHEMA)
+
+
+def current_user():
+    """The frontend sends a random id (X-User-Id header) that it stores in the
+    browser. It separates one person's data from another's. It is NOT a login:
+    anyone who knows an id can read that data. Add real accounts later if needed."""
+    uid = request.headers.get("X-User-Id", "").strip()
+    return uid if 8 <= len(uid) <= 64 else None
+
+
+NO_USER = ({"error": "Missing user id."}, 400)
+
+
+def num(value, high):
+    """Return value if it is a whole number from 0 to high, otherwise None."""
+    return value if type(value) is int and 0 <= value <= high else None
+
+
+def clean_drills(raw, logging):
+    """Validate a list of drills from the browser. Returns clean rows or None.
+    logging=False -> a plan (minutes + planned shots).
+    logging=True  -> results (minutes + shots made + shots attempted)."""
+    if not isinstance(raw, list) or not 1 <= len(raw) <= 20:
+        return None
+    rows = []
+    for item in raw:
+        if not isinstance(item, dict):
+            return None
+        title, category = item.get("title"), item.get("category")
+        minutes = num(item.get("minutes"), 300)
+        if not isinstance(title, str) or not title.strip() or not isinstance(category, str) or minutes is None:
+            return None
+        row = {"title": title.strip()[:80], "category": category[:30], "minutes": minutes}
+        if logging:
+            made, attempted = num(item.get("shots_made"), 10000), num(item.get("shots_attempted"), 10000)
+            if made is None or attempted is None or made > attempted:   # can't make more than you take
+                return None
+            row.update(shots_made=made, shots_attempted=attempted)
+        else:
+            shots = num(item.get("shots"), 10000)
+            if shots is None:
+                return None
+            row["shots"] = shots
+        rows.append(row)
+    return rows
+
+
+# NOTE: /api/workouts (POST) above already generates a suggested workout, so
+# the user's own saved workouts live under /api/saved-workouts.
+
+@app.get("/api/saved-workouts")
+def list_saved_workouts():
+    """Return every workout template this user has saved, newest first."""
+    uid = current_user()
+    if not uid:
+        return jsonify(NO_USER[0]), NO_USER[1]
+    with connect() as conn:
+        workouts = []
+        for w in conn.execute("SELECT id, name, created_at FROM workouts WHERE user_id = ? ORDER BY id DESC", (uid,)):
+            drills = conn.execute(
+                "SELECT title, category, minutes, shots FROM workout_drills WHERE workout_id = ? ORDER BY position",
+                (w["id"],)).fetchall()
+            workouts.append({**dict(w), "drills": [dict(x) for x in drills]})
+    return jsonify({"workouts": workouts})
+
+
+@app.post("/api/saved-workouts")
+def save_workout():
+    """Save a named workout template: {name, drills:[{title, category, minutes, shots}]}."""
+    uid = current_user()
+    if not uid:
+        return jsonify(NO_USER[0]), NO_USER[1]
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Send a JSON object with name and drills."}), 400
+    name = data.get("name")
+    drills = clean_drills(data.get("drills"), logging=False)
+    if not isinstance(name, str) or not name.strip():
+        return jsonify({"error": "Give the workout a name."}), 400
+    if drills is None:
+        return jsonify({"error": "Add 1 to 20 valid drills."}), 400
+    with connect() as conn:
+        workout_id = conn.execute("INSERT INTO workouts (user_id, name) VALUES (?, ?)", (uid, name.strip()[:60])).lastrowid
+        conn.executemany(
+            "INSERT INTO workout_drills (workout_id, position, title, category, minutes, shots) VALUES (?, ?, ?, ?, ?, ?)",
+            [(workout_id, i, d["title"], d["category"], d["minutes"], d["shots"]) for i, d in enumerate(drills)])
+    return jsonify({"id": workout_id}), 201
+
+
+@app.delete("/api/saved-workouts/<int:workout_id>")
+def delete_workout(workout_id):
+    """Delete one of this user's templates (its drills are removed by CASCADE)."""
+    uid = current_user()
+    if not uid:
+        return jsonify(NO_USER[0]), NO_USER[1]
+    with connect() as conn:
+        conn.execute("DELETE FROM workouts WHERE id = ? AND user_id = ?", (workout_id, uid))
+    return jsonify({"deleted": workout_id})
+
+
+@app.post("/api/sessions")
+def log_session():
+    """Log a finished session: {name, performed_on:'YYYY-MM-DD', drills:[{title, category, minutes, shots_made, shots_attempted}]}."""
+    uid = current_user()
+    if not uid:
+        return jsonify(NO_USER[0]), NO_USER[1]
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Send a JSON object with name, performed_on, and drills."}), 400
+    name = data.get("name")
+    try:
+        day = date.fromisoformat(data.get("performed_on", ""))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Choose a valid date."}), 400
+    drills = clean_drills(data.get("drills"), logging=True)
+    if not isinstance(name, str) or not name.strip():
+        return jsonify({"error": "The session needs a name."}), 400
+    if drills is None:
+        return jsonify({"error": "Check your drills. Shots made cannot be more than shots attempted."}), 400
+    with connect() as conn:
+        session_id = conn.execute(
+            "INSERT INTO sessions (user_id, name, performed_on) VALUES (?, ?, ?)",
+            (uid, name.strip()[:60], day.isoformat())).lastrowid
+        conn.executemany(
+            "INSERT INTO session_drills (session_id, title, category, minutes, shots_made, shots_attempted) VALUES (?, ?, ?, ?, ?, ?)",
+            [(session_id, d["title"], d["category"], d["minutes"], d["shots_made"], d["shots_attempted"]) for d in drills])
+    return jsonify({"id": session_id}), 201
+
+
+@app.get("/api/sessions")
+def week_summary():
+    """Sessions for the 7 days starting at ?week_start=YYYY-MM-DD, plus totals."""
+    uid = current_user()
+    if not uid:
+        return jsonify(NO_USER[0]), NO_USER[1]
+    try:
+        start = date.fromisoformat(request.args.get("week_start", ""))
+    except ValueError:
+        return jsonify({"error": "week_start must look like 2025-06-02."}), 400
+    end = start + timedelta(days=6)
+    sessions, totals = [], {"sessions": 0, "minutes": 0, "shots_made": 0, "shots_attempted": 0}
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, name, performed_on FROM sessions WHERE user_id = ? AND performed_on BETWEEN ? AND ? "
+            "ORDER BY performed_on, id", (uid, start.isoformat(), end.isoformat())).fetchall()
+        for s in rows:
+            drills = [dict(x) for x in conn.execute(
+                "SELECT title, category, minutes, shots_made, shots_attempted FROM session_drills WHERE session_id = ? ORDER BY id",
+                (s["id"],))]
+            sessions.append({**dict(s), "drills": drills})
+            totals["sessions"] += 1
+            for d in drills:                      # add this drill into the weekly totals
+                totals["minutes"] += d["minutes"]
+                totals["shots_made"] += d["shots_made"]
+                totals["shots_attempted"] += d["shots_attempted"]
+    return jsonify({"week_start": start.isoformat(), "week_end": end.isoformat(), "totals": totals, "sessions": sessions})
+
+
+@app.delete("/api/sessions/<int:session_id>")
+def delete_session(session_id):
+    """Delete one logged session belonging to this user."""
+    uid = current_user()
+    if not uid:
+        return jsonify(NO_USER[0]), NO_USER[1]
+    with connect() as conn:
+        conn.execute("DELETE FROM sessions WHERE id = ? AND user_id = ?", (session_id, uid))
+    return jsonify({"deleted": session_id})
 
 
 if __name__ == "__main__":
