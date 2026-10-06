@@ -313,7 +313,12 @@ def clean_drills(raw, logging):
         if (not isinstance(title, str) or not title.strip() or kind not in DRILL_KINDS
                 or not isinstance(category, str) or not category.strip() or minutes is None):
             return None
-        row = {"title": title.strip()[:80], "category": category[:30], "minutes": minutes}
+        row = {
+            "title": title.strip()[:80],
+            "category": category.strip()[:30],
+            "kind": kind,
+            "minutes": minutes
+        }
         if logging:
             made, attempted = num(item.get("shots_made"), 10000), num(item.get("shots_attempted"), 10000)
             if made is None or attempted is None or made > attempted:   # can't make more than you take
@@ -341,7 +346,7 @@ def list_saved_workouts():
         workouts = []
         for w in conn.execute("SELECT id, name, created_at FROM workouts WHERE user_id = ? ORDER BY id DESC", (uid,)):
             drills = conn.execute(
-                "SELECT title, category, minutes, shots FROM workout_drills WHERE workout_id = ? ORDER BY position",
+                "SELECT title, category, kind, minutes, shots FROM workout_drills WHERE workout_id = ? ORDER BY position",
                 (w["id"],)).fetchall()
             workouts.append({**dict(w), "drills": [dict(x) for x in drills]})
     return jsonify({"workouts": workouts})
@@ -405,7 +410,7 @@ def log_session():
             "INSERT INTO sessions (user_id, name, performed_on) VALUES (?, ?, ?)",
             (uid, name.strip()[:60], day.isoformat())).lastrowid
         conn.executemany(
-            "INSERT INTO session_drills (session_id, title, category, kind, minutes, shots_made, shots_attempted) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO session_drills (session_id, title, category, kind, minutes, shots_made, shots_attempted) VALUES (?, ?, ?, ?, ?, ?, ?)",
             [(session_id, d["title"], d["category"], d["kind"], d["minutes"], d["shots_made"], d["shots_attempted"]) for d in drills])
     return jsonify({"id": session_id}), 201
 
@@ -429,7 +434,7 @@ def week_summary():
             "ORDER BY performed_on, id", (uid, start.isoformat(), end.isoformat())).fetchall()
         for s in rows:
             drills = [dict(x) for x in conn.execute(
-                "SELECT title, category, minutes, shots_made, shots_attempted FROM session_drills WHERE session_id = ? ORDER BY id",
+                "SELECT title, category, kind, minutes, shots_made, shots_attempted FROM session_drills WHERE session_id = ? ORDER BY id",
                 (s["id"],))]
             sessions.append({**dict(s), "drills": drills})
             totals["sessions"] += 1
