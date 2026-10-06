@@ -8,17 +8,25 @@ from datetime import date, timedelta
 import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
-from flask_cors import CORS
+from flask_cors import CORS # lets Github Pages frontend communicate with Render backend
 
+# loads environment variables from .env
 load_dotenv()
+# creates the flask application
+# __name__ tells flask which file is running
 app = Flask(__name__)
 
 # Set FRONTEND_ORIGINS on Render to the exact origin(s) serving the frontend.
+# gets the allowed frontend URLs from the FRONTEND_ORIGINS environment variable
+# if variable is missing, it allows local development sites
 origins = [origin.strip() for origin in os.getenv(
     "FRONTEND_ORIGINS", "http://localhost:5500,http://127.0.0.1:5500"
 ).split(",") if origin.strip()]
 CORS(app, resources={r"/api/*": {"origins": origins}})
+# allows only those approved frontend URLs to make requests to routes beginning with /api/
 
+# A dictionary of valid basketball workout goals
+# the key is what the frontend sends, whil the value is the nicer label shown in response
 GOALS = {
     "shooting": "Shooting",
     "handling": "Ball handling",
@@ -26,74 +34,87 @@ GOALS = {
     "defense": "Defense",
     "conditioning": "Conditioning",
 }
+# only allowed training levels
 LEVELS = {"beginner", "intermediate", "advanced"}
-SPACES = {"court", "small"}
+# translates frontend categories into muscle names the external API expects (legs becomes quadriceps)
 STRENGTH_FOCUS = {"legs": "quadriceps", "core": "abdominals", "upper": "chest"}
+STRENGTH_FOCUS = {"legs": "quadriceps", "core": "abdominals", "upper": "chest"}
+DRILL_KINDS = {"basketball", "strength"}
 
 # Each drill specifies what it needs. The selector only returns feasible drills.
+# A dictionary containing possible basketball drills for each goal
+# each drill has: name, instructions, needs
 DRILLS = {
     "shooting": [
-        {"name": "Form shooting", "instruction": "Start close to the basket. Shoot with one hand, hold your follow-through, then add your guide hand.", "needs": ["ball", "hoop"]},
-        {"name": "Five-spot catch and shoot", "instruction": "Take shots from five spots. Rebound your shot and track makes at each spot.", "needs": ["ball", "hoop", "court"]},
-        {"name": "One-dribble pull-ups", "instruction": "From each wing, attack left and right for a balanced pull-up. Reset between reps.", "needs": ["ball", "hoop", "court"]},
-        {"name": "Air-shot mechanics", "instruction": "Practice your shooting stance, upward motion, and follow-through toward a wall target. No basket required.", "needs": []},
-        {"name": "Footwork into a shot pocket", "instruction": "Step into an imaginary pass, square your feet, and bring the ball into your shot pocket.", "needs": ["ball"]},
+        {"name": "Form shooting", "instruction": "Start close to the basket. Shoot with one hand, hold your follow-through, then add your guide hand."},
+        {"name": "Five-spot catch and shoot", "instruction": "Take shots from five spots. Rebound your shot and track makes at each spot."},
+        {"name": "One-dribble pull-ups", "instruction": "From each wing, attack left and right for a balanced pull-up. Reset between reps."},
+        {"name": "Air-shot mechanics", "instruction": "Practice your shooting stance, upward motion, and follow-through toward a wall target. No basket required."},
+        {"name": "Footwork into a shot pocket", "instruction": "Step into an imaginary pass, square your feet, and bring the ball into your shot pocket."},
     ],
     "handling": [
-        {"name": "Pound dribbles", "instruction": "Dribble low and firmly with each hand; keep your eyes up.", "needs": ["ball"]},
-        {"name": "Crossovers and between-the-legs", "instruction": "Alternate moves at a controlled pace, then increase speed while keeping the ball close.", "needs": ["ball"]},
-        {"name": "Change-of-pace attacks", "instruction": "Use a slow setup dribble, then accelerate for two dribbles; practice both hands.", "needs": ["ball", "court"]},
-        {"name": "Shadow dribble footwork", "instruction": "Move through crossovers and retreat steps without a ball, keeping your stance low.", "needs": []},
+        {"name": "Pound dribbles", "instruction": "Dribble low and firmly with each hand; keep your eyes up."},
+        {"name": "Crossovers and between-the-legs", "instruction": "Alternate moves at a controlled pace, then increase speed while keeping the ball close."},
+        {"name": "Change-of-pace attacks", "instruction": "Use a slow setup dribble, then accelerate for two dribbles; practice both hands."},
+        {"name": "Shadow dribble footwork", "instruction": "Move through crossovers and retreat steps without a ball, keeping your stance low."},
     ],
     "finishing": [
-        {"name": "Right- and left-hand layups", "instruction": "Alternate sides and focus on the correct two-step rhythm and soft touch.", "needs": ["ball", "hoop"]},
-        {"name": "Reverse finish series", "instruction": "Approach from each baseline and use the far side of the rim as protection.", "needs": ["ball", "hoop", "court"]},
-        {"name": "Two-step finishing footwork", "instruction": "Practice a controlled gather and two steps from both sides; finish with an imaginary layup.", "needs": []},
-        {"name": "Gather and balance", "instruction": "Take one controlled dribble, gather, and stop on balance. Repeat on both sides.", "needs": ["ball"]},
+        {"name": "Right- and left-hand layups", "instruction": "Alternate sides and focus on the correct two-step rhythm and soft touch."},
+        {"name": "Reverse finish series", "instruction": "Approach from each baseline and use the far side of the rim as protection."},
+        {"name": "Two-step finishing footwork", "instruction": "Practice a controlled gather and two steps from both sides; finish with an imaginary layup."},
+        {"name": "Gather and balance", "instruction": "Take one controlled dribble, gather, and stop on balance. Repeat on both sides."},
     ],
     "defense": [
-        {"name": "Defensive slides", "instruction": "Stay low, push off the trailing foot, and avoid crossing your feet.", "needs": []},
-        {"name": "Closeout and contain", "instruction": "Run toward a marker, shorten your steps, raise a hand, and settle into a defensive stance.", "needs": []},
-        {"name": "Slide-to-sprint transitions", "instruction": "Slide laterally, turn your hips, and sprint to the next marker.", "needs": ["court"]},
-        {"name": "Mirror footwork", "instruction": "Alternate quick reactions to imaginary offensive moves, staying balanced.", "needs": []},
+        {"name": "Defensive slides", "instruction": "Stay low, push off the trailing foot, and avoid crossing your feet."},
+        {"name": "Closeout and contain", "instruction": "Run toward a marker, shorten your steps, raise a hand, and settle into a defensive stance."},
+        {"name": "Slide-to-sprint transitions", "instruction": "Slide laterally, turn your hips, and sprint to the next marker."},
+        {"name": "Mirror footwork", "instruction": "Alternate quick reactions to imaginary offensive moves, staying balanced."},
     ],
     "conditioning": [
-        {"name": "Interval shuttles", "instruction": "Move between two markers at a strong pace, then walk to recover. Repeat.", "needs": ["court"]},
-        {"name": "Jump rope simulation", "instruction": "Use light, quick steps and relaxed shoulders; a rope is optional.", "needs": []},
-        {"name": "Lateral movement intervals", "instruction": "Alternate slides and easy recovery steps. Keep your chest upright.", "needs": []},
-        {"name": "Tempo movement", "instruction": "Alternate brisk movement with easy walking in a small area.", "needs": []},
+        {"name": "Interval shuttles", "instruction": "Move between two markers at a strong pace, then walk to recover. Repeat."},
+        {"name": "Jump rope simulation", "instruction": "Use light, quick steps and relaxed shoulders; a rope is optional."},
+        {"name": "Lateral movement intervals", "instruction": "Alternate slides and easy recovery steps. Keep your chest upright."},
+        {"name": "Tempo movement", "instruction": "Alternate brisk movement with easy walking in a small area."},
     ],
 }
 
-
+# creates a GET endpoint at /api/health
+# useful for checking whether your Render backend is running
 @app.get("/api/health")
 def health():
     return jsonify({"status": "ok"})
 
-
+# creates a POST route that accepts a strength focus and difficulty level, then gets exercises from API Ninjas
+# 
 @app.post("/api/exercises")
 def find_exercises():
     """Fetch real strength exercises without exposing the upstream API key."""
+    # reads the JSON body sent from the frontend (silent=True prevents Flask from crashing if invalid JSON is sent)
     data = request.get_json(silent=True)
+    # if the request is not a JSON dictionary/object, send and error and HTTP status code 400, meaning "bad request"
     if not isinstance(data, dict):
         return jsonify({"error": "Send a JSON object with focus and level."}), 400
+    # validates focus and level
     focus, level = data.get("focus"), data.get("level")
     if not isinstance(focus, str) or focus not in STRENGTH_FOCUS:
         return jsonify({"error": "Choose legs, core, or upper body."}), 400
     if not isinstance(level, str) or level not in LEVELS:
         return jsonify({"error": "Choose beginner, intermediate, or advanced."}), 400
-
+    # gets your private API key from the backend environment
     api_key = os.getenv("API_NINJAS_KEY")
+    
+    # if there is no key, return status code 503, meaning the service is currently unavailable
     if not api_key:
         return jsonify({"error": "Exercise search is not configured yet. Add the API key on the backend."}), 503
-
+    # makes the request to API Ninjas
     try:
         upstream = requests.get(
             "https://api.api-ninjas.com/v1/exercises",
-            params={"muscle": STRENGTH_FOCUS[focus], "difficulty": "expert" if level == "advanced" else level},
-            headers={"X-Api-Key": api_key},
-            timeout=10,
+            params={"muscle": STRENGTH_FOCUS[focus], "difficulty": "expert" if level == "advanced" else level}, # sends the muscle and difficulty as URL parameters
+            headers={"X-Api-Key": api_key}, # sends your key securely from the backend
+            timeout=10, # timeout after 10 seconds
         )
+        # handles API errors
         if upstream.status_code == 429:
             return jsonify({"error": "The exercise service has reached its request limit. Try again later."}), 503
         if not upstream.ok:
@@ -112,8 +133,20 @@ def find_exercises():
             "instructions": item.get("instructions", "No instructions provided."),
             "equipment": item.get("equipments") if isinstance(item.get("equipments"), list) else [],
             "safety_info": item.get("safety_info", ""),
+            # These fields let the frontend add an API exercise directly to a
+            # saved plan or a logged session without inventing shot statistics.
+            "workout_drill": {
+                "title": item.get("name", "Exercise"),
+                "category": "Strength",
+                "kind": "strength",
+                "minutes": 10,
+                "shots": 0,
+                "shots_made": 0,
+                "shots_attempted": 0,
+            },
         }
-        for item in exercises[:5] if isinstance(item, dict)
+        for item in exercises[:5] if isinstance(item, dict) # cleans first five exercises before giving them to the frontend
+        # TODO - does this mean only allowed 5 exercises?
     ]
     return jsonify({"focus": focus, "level": level, "source": "API Ninjas Exercises API", "exercises": cleaned})
 
@@ -193,6 +226,7 @@ CREATE TABLE IF NOT EXISTS workout_drills (
     position INTEGER NOT NULL,
     title TEXT NOT NULL,
     category TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'basketball',      -- basketball or strength
     minutes INTEGER NOT NULL,
     shots INTEGER NOT NULL                       -- planned shots (0 = not a shooting drill)
 );
@@ -210,21 +244,22 @@ CREATE TABLE IF NOT EXISTS session_drills (
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     category TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'basketball',      -- basketball or strength
     minutes INTEGER NOT NULL,
     shots_made INTEGER NOT NULL,
     shots_attempted INTEGER NOT NULL
 );
 """
 
-
+# function safely opens and closes a database connection
 @contextmanager
 def connect():
     """Open a connection, commit on success, and always close it."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)               # opens the SQLite database
     conn.row_factory = sqlite3.Row                # rows behave like dicts
     conn.execute("PRAGMA foreign_keys = ON")      # makes ON DELETE CASCADE work
     try:
-        yield conn
+        yield conn  # temporarily gives the open connection to the code inside
         conn.commit()
     finally:
         conn.close()
@@ -232,8 +267,15 @@ def connect():
 
 with connect() as _conn:                          # create tables on startup
     _conn.executescript(SCHEMA)
+    # Existing databases predate the kind column, so add it once without
+    # deleting anyone's saved workouts or logged sessions.
+    for _table in ("workout_drills", "session_drills"):
+        _columns = {row["name"] for row in _conn.execute(f"PRAGMA table_info({_table})")}
+        if "kind" not in _columns:
+            _conn.execute(f"ALTER TABLE {_table} ADD COLUMN kind TEXT NOT NULL DEFAULT 'basketball'")
 
-
+# gets the value from the request header named X-User-Id
+# returns the user ID only if it has between 8 and 64 characters, otherwise return None
 def current_user():
     """The frontend sends a random id (X-User-Id header) that it stores in the
     browser. It separates one person's data from another's. It is NOT a login:
@@ -244,25 +286,32 @@ def current_user():
 
 NO_USER = ({"error": "Missing user id."}, 400)
 
-
+# validate a number. it only allows whole integers from 0 through high
 def num(value, high):
     """Return value if it is a whole number from 0 to high, otherwise None."""
     return value if type(value) is int and 0 <= value <= high else None
 
-
+# validate drills before saving it in the database
 def clean_drills(raw, logging):
     """Validate a list of drills from the browser. Returns clean rows or None.
     logging=False -> a plan (minutes + planned shots).
     logging=True  -> results (minutes + shots made + shots attempted)."""
+    # data must be a list with 1-20 drills
     if not isinstance(raw, list) or not 1 <= len(raw) <= 20:
         return None
     rows = []
+    # for each drill, it must be a dictionary with title and category and minutes must be integer between 0 and 300
     for item in raw:
         if not isinstance(item, dict):
             return None
-        title, category = item.get("title"), item.get("category")
+        title = item.get("title")
+        kind = item.get("kind", "basketball")
+        # Strength API exercises can use the default "Strength" category;
+        # basketball drills still need the category supplied by the frontend.
+        category = item.get("category", "Strength" if kind == "strength" else None)
         minutes = num(item.get("minutes"), 300)
-        if not isinstance(title, str) or not title.strip() or not isinstance(category, str) or minutes is None:
+        if (not isinstance(title, str) or not title.strip() or kind not in DRILL_KINDS
+                or not isinstance(category, str) or not category.strip() or minutes is None):
             return None
         row = {"title": title.strip()[:80], "category": category[:30], "minutes": minutes}
         if logging:
@@ -270,7 +319,7 @@ def clean_drills(raw, logging):
             if made is None or attempted is None or made > attempted:   # can't make more than you take
                 return None
             row.update(shots_made=made, shots_attempted=attempted)
-        else:
+        else: # logging false thn this is a saved plan, so check only planned shots
             shots = num(item.get("shots"), 10000)
             if shots is None:
                 return None
@@ -320,7 +369,7 @@ def save_workout():
             [(workout_id, i, d["title"], d["category"], d["minutes"], d["shots"]) for i, d in enumerate(drills)])
     return jsonify({"id": workout_id}), 201
 
-
+# deletes a saved workout
 @app.delete("/api/saved-workouts/<int:workout_id>")
 def delete_workout(workout_id):
     """Delete one of this user's templates (its drills are removed by CASCADE)."""
@@ -331,7 +380,7 @@ def delete_workout(workout_id):
         conn.execute("DELETE FROM workouts WHERE id = ? AND user_id = ?", (workout_id, uid))
     return jsonify({"deleted": workout_id})
 
-
+# saves a workout the user actually completed
 @app.post("/api/sessions")
 def log_session():
     """Log a finished session: {name, performed_on:'YYYY-MM-DD', drills:[{title, category, minutes, shots_made, shots_attempted}]}."""
@@ -356,11 +405,11 @@ def log_session():
             "INSERT INTO sessions (user_id, name, performed_on) VALUES (?, ?, ?)",
             (uid, name.strip()[:60], day.isoformat())).lastrowid
         conn.executemany(
-            "INSERT INTO session_drills (session_id, title, category, minutes, shots_made, shots_attempted) VALUES (?, ?, ?, ?, ?, ?)",
-            [(session_id, d["title"], d["category"], d["minutes"], d["shots_made"], d["shots_attempted"]) for d in drills])
+            "INSERT INTO session_drills (session_id, title, category, kind, minutes, shots_made, shots_attempted) VALUES (?, ?, ?, ?, ?, ?)",
+            [(session_id, d["title"], d["category"], d["kind"], d["minutes"], d["shots_made"], d["shots_attempted"]) for d in drills])
     return jsonify({"id": session_id}), 201
 
-
+# returns all logged sessions in a requested seven-day window
 @app.get("/api/sessions")
 def week_summary():
     """Sessions for the 7 days starting at ?week_start=YYYY-MM-DD, plus totals."""
@@ -372,7 +421,8 @@ def week_summary():
     except ValueError:
         return jsonify({"error": "week_start must look like 2025-06-02."}), 400
     end = start + timedelta(days=6)
-    sessions, totals = [], {"sessions": 0, "minutes": 0, "shots_made": 0, "shots_attempted": 0}
+    sessions, totals = [], {"sessions": 0, "minutes": 0, "basketball_minutes": 0,
+        "strength_minutes": 0, "shots_made": 0, "shots_attempted": 0}
     with connect() as conn:
         rows = conn.execute(
             "SELECT id, name, performed_on FROM sessions WHERE user_id = ? AND performed_on BETWEEN ? AND ? "
@@ -385,11 +435,12 @@ def week_summary():
             totals["sessions"] += 1
             for d in drills:                      # add this drill into the weekly totals
                 totals["minutes"] += d["minutes"]
+                totals[f'{d["kind"]}_minutes'] += d["minutes"]
                 totals["shots_made"] += d["shots_made"]
                 totals["shots_attempted"] += d["shots_attempted"]
     return jsonify({"week_start": start.isoformat(), "week_end": end.isoformat(), "totals": totals, "sessions": sessions})
 
-
+# deletes one logged workout session for the current user
 @app.delete("/api/sessions/<int:session_id>")
 def delete_session(session_id):
     """Delete one logged session belonging to this user."""
@@ -400,6 +451,6 @@ def delete_session(session_id):
         conn.execute("DELETE FROM sessions WHERE id = ? AND user_id = ?", (session_id, uid))
     return jsonify({"deleted": session_id})
 
-
+# run app
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
