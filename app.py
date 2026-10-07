@@ -343,7 +343,7 @@ def list_saved_workouts():
     if not uid:
         return jsonify(NO_USER[0]), NO_USER[1]
     with connect() as conn:
-        workouts = []x
+        workouts = []
         for w in conn.execute("SELECT id, name, created_at FROM workouts WHERE user_id = ? ORDER BY id DESC", (uid,)):
             drills = conn.execute(
                 "SELECT title, category, kind, minutes, shots FROM workout_drills WHERE workout_id = ? ORDER BY position",
