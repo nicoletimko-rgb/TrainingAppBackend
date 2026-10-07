@@ -321,7 +321,10 @@ def clean_drills(raw, logging):
         }
         if logging:
             made, attempted = num(item.get("shots_made"), 10000), num(item.get("shots_attempted"), 10000)
-            if made is None or attempted is None or made > attempted:   # can't make more than you take
+            if made is None or attempted is None:
+                return None
+
+            if kind != "strength" and made > attempted:
                 return None
             row.update(shots_made=made, shots_attempted=attempted)
         else: # logging false thn this is a saved plan, so check only planned shots
@@ -441,8 +444,9 @@ def week_summary():
             for d in drills:                      # add this drill into the weekly totals
                 totals["minutes"] += d["minutes"]
                 totals[f'{d["kind"]}_minutes'] += d["minutes"]
-                totals["shots_made"] += d["shots_made"]
-                totals["shots_attempted"] += d["shots_attempted"]
+                if d["kind"] != "strength":
+                    totals["shots_made"] += d["shots_made"]
+                    totals["shots_attempted"] += d["shots_attempted"]
     return jsonify({"week_start": start.isoformat(), "week_end": end.isoformat(), "totals": totals, "sessions": sessions})
 
 # deletes one logged workout session for the current user
