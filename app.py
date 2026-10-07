@@ -370,7 +370,7 @@ def save_workout():
     with connect() as conn:
         workout_id = conn.execute("INSERT INTO workouts (user_id, name) VALUES (?, ?)", (uid, name.strip()[:60])).lastrowid
         conn.executemany(
-            "INSERT INTO workout_drills (workout_id, position, title, category, kind, minutes, shots) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO workout_drills (workout_id, position, title, category, kind, minutes, shots) VALUES (?, ?, ?, ?, ?, ?, ?)",
             [(workout_id, i, d["title"], d["category"], d["kind"], d["minutes"], d["shots"]) for i, d in enumerate(drills)])
     return jsonify({"id": workout_id}), 201
 
