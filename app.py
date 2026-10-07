@@ -343,7 +343,7 @@ def list_saved_workouts():
     if not uid:
         return jsonify(NO_USER[0]), NO_USER[1]
     with connect() as conn:
-        workouts = []
+        workouts = []x
         for w in conn.execute("SELECT id, name, created_at FROM workouts WHERE user_id = ? ORDER BY id DESC", (uid,)):
             drills = conn.execute(
                 "SELECT title, category, kind, minutes, shots FROM workout_drills WHERE workout_id = ? ORDER BY position",
@@ -354,7 +354,7 @@ def list_saved_workouts():
 
 @app.post("/api/saved-workouts")
 def save_workout():
-    """Save a named workout template: {name, drills:[{title, category, minutes, shots}]}."""
+    """Save a named workout template: {name, drills:[{title, category,kind, minutes, shots}]}."""
     uid = current_user()
     if not uid:
         return jsonify(NO_USER[0]), NO_USER[1]
@@ -370,8 +370,8 @@ def save_workout():
     with connect() as conn:
         workout_id = conn.execute("INSERT INTO workouts (user_id, name) VALUES (?, ?)", (uid, name.strip()[:60])).lastrowid
         conn.executemany(
-            "INSERT INTO workout_drills (workout_id, position, title, category, minutes, shots) VALUES (?, ?, ?, ?, ?, ?)",
-            [(workout_id, i, d["title"], d["category"], d["minutes"], d["shots"]) for i, d in enumerate(drills)])
+            "INSERT INTO workout_drills (workout_id, position, title, category, kind, minutes, shots) VALUES (?, ?, ?, ?, ?, ?)",
+            [(workout_id, i, d["title"], d["category"], d["kind"], d["minutes"], d["shots"]) for i, d in enumerate(drills)])
     return jsonify({"id": workout_id}), 201
 
 # deletes a saved workout
@@ -388,7 +388,7 @@ def delete_workout(workout_id):
 # saves a workout the user actually completed
 @app.post("/api/sessions")
 def log_session():
-    """Log a finished session: {name, performed_on:'YYYY-MM-DD', drills:[{title, category, minutes, shots_made, shots_attempted}]}."""
+    """Log a finished session: {name, performed_on:'YYYY-MM-DD', drills:[{title, category, kind, minutes, shots_made, shots_attempted}]}."""
     uid = current_user()
     if not uid:
         return jsonify(NO_USER[0]), NO_USER[1]
