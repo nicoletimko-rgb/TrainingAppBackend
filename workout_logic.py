@@ -6,7 +6,7 @@ DRILL_KINDS = {"basketball", "strength"}
 # validate a number. it only allows whole integers from 0 through high
 def num(value, high):
     """Return value if it is a whole number from 0 to high, otherwise None."""
-    return value if type(value) is int and 0 < value <= high else None
+    return value if type(value) is int and 0 <= value <= high else None
 
 # validate drills before saving it in the database
 def clean_drills(raw, logging):
