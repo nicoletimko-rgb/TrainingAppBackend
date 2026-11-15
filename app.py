@@ -9,6 +9,7 @@ import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS # lets Github Pages frontend communicate with Render backend
+from workout_logic import num, clean_drills, clean_exercises
 
 # loads environment variables from .env
 load_dotenv()
