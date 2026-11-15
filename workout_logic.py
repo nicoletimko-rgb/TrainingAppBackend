@@ -75,7 +75,7 @@ def clean_exercises(exercises):
                 "shots_attempted": 0,
             },
         }
-        for item in exercises[:5] if isinstance(item, dict) # cleans first five exercises before giving them to the frontend
+        for item in exercises[:4] if isinstance(item, dict) # cleans first five exercises before giving them to the frontend
         # TODO - does this mean only allowed 5 exercises?
     ]
     return cleaned
