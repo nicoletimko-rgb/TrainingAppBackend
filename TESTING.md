@@ -114,3 +114,18 @@ test_workout_logic.py:83: AssertionError
 ============================================== short test summary info ===============================================
 FAILED test_workout_logic.py::test_clean_exercises_limits_to_first_five_entries - AssertionError: assert ['Exercise 0'... 'Exercise 3'] == ['Exercise 0'... 'Exercise 4']
 ============================================ 1 failed, 11 passed in 0.03s ============================================
+
+
+Step 7: 
+
+https://github.com/nicoletimko-rgb/TrainingAppBackend/actions/runs/43722868260
+
+https://github.com/nicoletimko-rgb/TrainingAppBackend/actions/runs/43723004590
+
+
+step 8: 
+
+def num(value, high):
+    return value if type(value) is int and 0 < value <= high else None
+
+
