@@ -84,6 +84,32 @@ DRILLS = {
 def health():
     return jsonify({"status": "ok"})
 
+def clean_exercises(exercises):
+    cleaned = [
+        {
+            "name": item.get("name", "Exercise"),
+            "muscle": item.get("muscle", ""),
+            "difficulty": item.get("difficulty", ""),
+            "instructions": item.get("instructions", "No instructions provided."),
+            "equipment": item.get("equipments") if isinstance(item.get("equipments"), list) else [],
+            "safety_info": item.get("safety_info", ""),
+            # These fields let the frontend add an API exercise directly to a
+            # saved plan or a logged session without inventing shot statistics.
+            "workout_drill": {
+                "title": item.get("name", "Exercise"),
+                "category": "Strength",
+                "kind": "strength",
+                "minutes": 10,
+                "shots": 0,
+                "shots_made": 0,
+                "shots_attempted": 0,
+            },
+        }
+        for item in exercises[:5] if isinstance(item, dict) # cleans first five exercises before giving them to the frontend
+        # TODO - does this mean only allowed 5 exercises?
+    ]
+    return cleaned
+
 # creates a POST route that accepts a strength focus and difficulty level, then gets exercises from API Ninjas
 # 
 @app.post("/api/exercises")
@@ -125,29 +151,7 @@ def find_exercises():
 
     if not isinstance(exercises, list):
         return jsonify({"error": "The exercise service returned an unexpected response."}), 502
-    cleaned = [
-        {
-            "name": item.get("name", "Exercise"),
-            "muscle": item.get("muscle", ""),
-            "difficulty": item.get("difficulty", ""),
-            "instructions": item.get("instructions", "No instructions provided."),
-            "equipment": item.get("equipments") if isinstance(item.get("equipments"), list) else [],
-            "safety_info": item.get("safety_info", ""),
-            # These fields let the frontend add an API exercise directly to a
-            # saved plan or a logged session without inventing shot statistics.
-            "workout_drill": {
-                "title": item.get("name", "Exercise"),
-                "category": "Strength",
-                "kind": "strength",
-                "minutes": 10,
-                "shots": 0,
-                "shots_made": 0,
-                "shots_attempted": 0,
-            },
-        }
-        for item in exercises[:5] if isinstance(item, dict) # cleans first five exercises before giving them to the frontend
-        # TODO - does this mean only allowed 5 exercises?
-    ]
+    cleaned = clean_exercises(exercises)
     return jsonify({"focus": focus, "level": level, "source": "API Ninjas Exercises API", "exercises": cleaned})
 
 
